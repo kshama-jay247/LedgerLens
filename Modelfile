@@ -1,0 +1,6 @@
+# Build with: ollama pull qwen2.5:3b-instruct && ollama create ledgerlens -f Modelfile
+FROM qwen2.5:3b-instruct
+PARAMETER num_ctx 4096
+PARAMETER num_predict 1500
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9

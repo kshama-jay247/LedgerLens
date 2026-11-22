@@ -1,0 +1,12 @@
+node_modules/
+.env
+*.db
+*.db-*
+.mastra/
+dist/
+artifacts/
+docs/ingested/finance/*/
+!docs/ingested/finance/regulatory/
+!docs/ingested/finance/domain-notes/
+!docs/ingested/finance/README.md
+.DS_Store

@@ -1,0 +1,8 @@
+# Speed profile for CPU-only laptops / live demos.
+# Build: ollama pull qwen2.5:1.5b-instruct && ollama create ledgerlens-fast -f Modelfile.fast
+# Then in .env: OLLAMA_MODEL=ledgerlens-fast  and  FAST=1
+FROM qwen2.5:1.5b-instruct
+PARAMETER num_ctx 2048
+PARAMETER num_predict 900
+PARAMETER temperature 0.2
+PARAMETER top_p 0.9

@@ -1,0 +1,35 @@
+{
+  "name": "ledgerlens",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LedgerLens - local-first agentic assistant for financial-sector requirements and SDLC recommendation (Mastra + Ollama)",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "mastra dev",
+    "demo": "tsx --env-file-if-exists=.env scripts/run-demo.ts",
+    "eval": "tsx --env-file-if-exists=.env scripts/run-demo.ts --file eval/scenarios.json",
+    "eval:baseline": "cross-env RAG=off tsx --env-file-if-exists=.env scripts/run-demo.ts --file eval/scenarios.json",
+    "corpus": "tsx scripts/fetch-corpus.ts",
+    "check": "tsc --noEmit",
+    "warmup": "tsx --env-file-if-exists=.env scripts/warmup.ts",
+    "eval:fast": "cross-env FAST=1 OLLAMA_MODEL=ledgerlens-fast RAG_TOP_K=2 tsx --env-file-if-exists=.env scripts/run-demo.ts --file eval/scenarios.json",
+    "demo:fast": "cross-env FAST=1 OLLAMA_MODEL=ledgerlens-fast RAG_TOP_K=2 tsx --env-file-if-exists=.env scripts/run-demo.ts",
+    "warmup:fast": "cross-env OLLAMA_MODEL=ledgerlens-fast tsx scripts/warmup.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/openai-compatible": "^3.0.93",
+    "@mastra/core": "^1.85.0",
+    "@mastra/libsql": "^1.31.1",
+    "cross-env": "^10.1.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "mastra": "^1.40.1",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,6 @@
+[
+  { "id": "payments", "scenario": "Design a mobile payments module that supports peer-to-peer transfers, merchant payments, transaction history, fraud monitoring and integration with an existing core banking system." },
+  { "id": "lending", "scenario": "Design a loan origination and approval module for a retail bank covering application intake, credit assessment, document upload, approval workflow and disbursement." },
+  { "id": "kyc", "scenario": "Design a customer KYC onboarding module with identity verification, document capture, sanctions screening, risk scoring and audit trail." },
+  { "id": "reporting", "scenario": "Design a financial reporting and reconciliation module that consolidates ledger data, produces monthly statements and supports external audit access." }
+]
