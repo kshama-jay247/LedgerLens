@@ -46,7 +46,7 @@ table{border-collapse:collapse;width:100%}th,td{border:1px solid var(--line);pad
 <h2>Non-functional requirements</h2>${reqTable(p.nonFunctional)}
 <h2>Risks</h2>${list(p.risks.map((r) => `${r.risk} -> ${r.mitigation}`))}
 <h2>Open questions</h2>${list(p.openQuestions)}
-<h2>SDLC recommendation</h2><div class=rec><b>Recommended: ${e(s.recommended)}</b></div>${bars}
+<h2>SDLC recommendation</h2><div class=rec><b>Recommended: ${e(s.recommended)}</b></div>${s.rules.length ? `<p class=muted>Decision rules fired:</p>${list(s.rules)}` : ""}${bars}
 <h3>Criterion ratings</h3><div class=scroll><table><tr><th>Criterion</th><th>Score</th>${hasR ? "<th>Rationale</th>" : ""}</tr>${ratings}</table></div>
 <h3>Project workflow</h3><p>${e(s.plan.rationale)}</p><ol>${phases}</ol>
 <h3>Human approval points</h3>${list(s.plan.humanApprovalPoints)}

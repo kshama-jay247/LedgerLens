@@ -96,6 +96,7 @@ export const WorkflowPlan = z.object({
 export const SdlcRecommendation = z.object({
   ratings: z.record(z.string(), z.object({ score: z.number(), rationale: z.string() })),
   ranking: z.array(z.object({ method: z.string(), score: z.number() })),
+  rules: z.array(z.string()).default([]),
   recommended: z.string(),
   plan: WorkflowPlan,
   disclaimer: z.string(),

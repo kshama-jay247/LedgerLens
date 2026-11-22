@@ -22,7 +22,7 @@ const ragOn = (o?: Opts) => o?.rag ?? process.env.RAG !== "off";
 /** Disk cache so a repeated scenario returns instantly (set NOCACHE=1 to disable). */
 async function cached<T>(parts: unknown[], fn: () => Promise<T>): Promise<T> {
   if (process.env.NOCACHE === "1") return fn();
-  const key = createHash("sha1").update(JSON.stringify(["v4", process.env.OLLAMA_MODEL, FAST, ...parts])).digest("hex").slice(0, 16);
+  const key = createHash("sha1").update(JSON.stringify([parts[0] === "sdlc" ? "v8" : "v4", process.env.OLLAMA_MODEL, FAST, ...parts])).digest("hex").slice(0, 16);
   const dir = join(process.cwd(), "artifacts", "cache");
   const file = join(dir, `${key}.json`);
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8")) as T;
@@ -68,7 +68,7 @@ export function extractJson(text: string): unknown {
 }
 
 /** Ask the model for JSON, validate with zod, retry once with the error fed back. */
-async function askJson<S extends z.ZodTypeAny>(agent: Agent, prompt: string, schema: S, retries = 1): Promise<z.infer<S>> {
+async function askJson<S extends z.ZodTypeAny>(agent: Agent, prompt: string, schema: S, retries = 2): Promise<z.infer<S>> {
   let p = prompt;
   let lastErr: unknown;
   for (let i = 0; i <= retries; i++) {
@@ -77,7 +77,8 @@ async function askJson<S extends z.ZodTypeAny>(agent: Agent, prompt: string, sch
       return schema.parse(extractJson(res.text));
     } catch (e) {
       lastErr = e;
-      p = `${prompt}\n\nYour previous reply was invalid (${String(e).slice(0, 200)}). Return ONLY the JSON object.`;
+      console.warn(`  (model reply was not usable JSON, retrying; it began: ${JSON.stringify(res.text.slice(0, 80))})`);
+      p = `${prompt}\n\nYour previous reply was invalid (${String(e).slice(0, 120)}). Reply with ONLY a JSON object: start with { and end with }. No other text.`;
     }
   }
   throw new Error(`Model did not return valid JSON: ${String(lastErr).slice(0, 300)}`);
@@ -145,14 +146,21 @@ async function runRequirementsUncached(scenario: string, opts?: Opts): Promise<R
   const ev = fmtEvidence(chunks);
   const valid = new Set(chunks.map((c) => c.id));
 
-  const a = await askJson(financeRequirementsAgent, partAPrompt(scenario, ev), PartA);
+  const a = await askJson(financeRequirementsAgent, partAPrompt(scenario, ev), PartA).catch(() => PartA.parse({}));
+  if (!a.stakeholders.length) {
+    a.stakeholders = [
+      { name: "End users", concern: "A usable product that meets their needs" },
+      { name: "Product owner", concern: "Scope, priorities and delivery" },
+      { name: "Engineering team", concern: "A maintainable, testable solution" },
+    ];
+  }
   const sc = stems(scenario);
   const cs = stems(a.context);
   const dup = [...cs].filter((x) => sc.has(x)).length / Math.max(1, cs.size) > 0.8;
   const context = dup ? "" : a.context; // drop a context sentence that just repeats the scenario
   const ctx = `${context} Stakeholders: ${a.stakeholders.map((s) => s.name).join(", ")}.`;
 
-  let b = await askJson(financeRequirementsAgent, partBPrompt(scenario, ctx, ev), PartB);
+  let b = await askJson(financeRequirementsAgent, partBPrompt(scenario, ctx, ev), PartB).catch(() => PartB.parse({}));
   if (b.functional.length < 2) {
     // Small models sometimes return a single item; ask once more for distinct ones.
     const retry = await askJson(
@@ -162,7 +170,7 @@ async function runRequirementsUncached(scenario: string, opts?: Opts): Promise<R
     ).catch(() => b);
     if (retry.functional.length > b.functional.length) b = retry;
   }
-  const c = await askJson(financeRequirementsAgent, partCPrompt(scenario, ctx, ev), PartC);
+  const c = await askJson(financeRequirementsAgent, partCPrompt(scenario, ctx, ev), PartC).catch(() => PartC.parse({}));
 
   // If the model gave no regulatory drivers, derive generic, clearly-unverified ones from the scenario.
   const drivers = a.regulatoryDrivers.length
@@ -207,26 +215,90 @@ export function runSdlc(profile: RequirementsProfile): Promise<SdlcRecommendatio
   return cached(["sdlc", profile], () => runSdlcUncached(profile));
 }
 
-/** Keyword signals from the requirement text: a second, model-independent opinion on each criterion. */
+/**
+ * Keyword signals. The scenario text drives them; the generated requirement text only nudges (at most +1 per
+ * criterion), because a small finance-tuned model tends to add compliance/audit wording to any project.
+ */
 export function keywordScores(p: RequirementsProfile): Record<Criterion, number> {
-  const text = [p.scenario, ...p.regulatoryDrivers, ...[...p.functional, ...p.nonFunctional].map((r) => `${r.statement} ${r.acceptanceCriteria}`), ...p.risks.map((r) => r.risk)]
+  const scen = p.scenario.toLowerCase();
+  const req = [...p.regulatoryDrivers, ...[...p.functional, ...p.nonFunctional].map((r) => `${r.statement} ${r.acceptanceCriteria}`), ...p.risks.map((r) => r.risk)]
     .join(" ")
     .toLowerCase();
-  const n = (re: RegExp) => (text.match(re) ?? []).length;
-  const has = (re: RegExp) => (re.test(text) ? 1 : 0);
-  const clamp = (x: number) => Math.max(1, Math.min(5, x));
-  const reg = n(/kyc|aml|complian|regulat|jurisdiction|sanction|statutory|audit/g);
+  const count = (re: RegExp, text: string) => (text.match(re) ?? []).length;
+  const h = (re: RegExp) => Math.min(1, (re.test(scen) ? 1 : 0) + (re.test(req) ? 0.5 : 0)); // 0, 0.5 or 1
+  const drive = (re: RegExp, cap: number) => Math.min(cap, 2 * count(re, scen) + Math.min(1, count(re, req)));
+  const clamp = (x: number) => Math.max(1, Math.min(5, Math.round(x)));
+  // Financial software is regulated, security-sensitive and audited by default.
+  const fin = /bank|loan|lend|credit|payment|insurance|kyc|aml|trading|invest|ledger|financ|fintech|wallet|mortgage|claims|brokerage|treasury/.test(scen) ? 1 : 0;
+  const reg = drive(/kyc|aml|complian|regulat|jurisdiction|sanction|statutory|audit/g, 3);
   return {
-    requirementStability: clamp(3 - has(/may change|evolv|uncertain|prototype|experiment|pilot/) + has(/fixed|well-defined|mandated/)),
-    regulatoryStrictness: clamp(2 + Math.min(3, reg)),
-    securityCriticality: clamp(2 + Math.min(2, n(/encrypt|authenticat|fraud|secur|vault|attack|breach|privacy/g)) + has(/payment|transfer|card|loan|ledger|account|fund/)),
-    auditability: clamp(2 + Math.min(3, n(/audit|trace|log|reconcil|immutable|evidence/g))),
-    integrationComplexity: clamp(2 + Math.min(3, n(/integrat|gateway|core bank|\bapi\b|third.party|external|interface/g))),
-    changeFrequency: clamp(3 + has(/rules|models|versioned|configurable|change process|tuning/) - has(/fixed|mandated/)),
-    technicalUncertainty: clamp(2 + has(/machine learning|\bai\b|model|real.time|blockchain|novel/) + has(/prototype|experiment|unproven/)),
-    testingFormality: clamp(2 + has(/verify|test|reconcil|acceptance|validation/) + has(/audit|complian/) + (reg >= 3 ? 1 : 0)),
-    failureConsequence: clamp(3 + has(/payment|transaction|transfer|loan|ledger|fund|money/) + has(/fraud|loss|penalt|breach/)),
+    requirementStability: clamp(3 - h(/may change|evolv|uncertain|prototype|experiment|pilot/) + h(/fixed|well-defined|mandated/)),
+    regulatoryStrictness: clamp(2 + reg + fin),
+    securityCriticality: clamp(2 + drive(/encrypt|authenticat|fraud|secur|vault|attack|breach|privacy/g, 2) + h(/payment|transfer|card|loan|ledger|account|fund/) + fin),
+    auditability: clamp(2 + drive(/audit|trace|log|reconcil|immutable|evidence/g, 3) + fin),
+    integrationComplexity: clamp(2 + drive(/integrat|gateway|core bank|\bapi\b|third.party|external|interface|legacy/g, 3)),
+    changeFrequency: clamp(3 + h(/rules|models|versioned|configurable|change process|tuning/) - h(/fixed|mandated/)),
+    technicalUncertainty: clamp(2 + h(/machine learning|\bai\b|model|real.time|blockchain|novel/) + h(/prototype|experiment|unproven/)),
+    testingFormality: clamp(2 + h(/verify|test|reconcil|acceptance|validation/) + h(/audit|complian/) + (reg >= 3 ? 1 : 0)),
+    failureConsequence: clamp(3 + h(/payment|transaction|transfer|loan|ledger|fund|money/) + h(/fraud|loss|penalt|breach/) + fin),
   };
+}
+
+/** Conditions the user states outright in the scenario text. */
+export function detect(scenario: string) {
+  const t = scenario.toLowerCase();
+  return {
+    stable: /won.?t change|will not change|not (going to )?change|(very |fully )?well[- ](known|understood|defined|documented)|stable (requirements|scope)|(requirements?|scope) (are |is )?(fixed|frozen|stable|clear)|fixed (requirements|scope)|no (major )?changes/.test(t),
+    volatile: /(requirements?|scope) (are |is )?(unclear|uncertain|evolving|changing|volatile|unknown)|chang(e|es|ing) (very )?(frequently|often)|frequent(ly)? chang|evolving requirements|not sure what|experimental|prototype|start-?up/.test(t),
+    feedback: /user feedback|customer feedback|feedback (is|are) (important|essential|key)|working (demo|software|prototype|version)|early (demo|release|version)|iterative|incremental|demo during development|short (period|time|timeline|deadline)|tight (deadline|schedule)|rapid(ly)?|quickly/.test(t),
+    experienced: /(worked on|built|delivered|done) (something |a )?(similar|like this)|similar (project|system)|experienced team|familiar with|proven technolog/.test(t),
+    unproven: /new technolog|unproven|cutting[- ]edge|novel|never (done|built)|unfamiliar|research/.test(t),
+    unknowns: /unknowns?|not (yet )?(clear|known)|unclear|uncertain/.test(t),
+    risky: /high[- ]risk|risk (analysis|assessment|management)|risky|large[- ]scale and complex|complex and risky/.test(t),
+    continuous: /continuous (delivery|deployment)|weekly release|daily release|ci\/cd|devops/.test(t),
+    strictTest: /(strict|rigorous|formal|extensive|thorough) (testing|verification|validation)|safety[- ]critical|life[- ]critical|mission[- ]critical|zero (defects|tolerance)/.test(t),
+    regulated: /regulat|complian|audit|sign-off|kyc|aml|legal|statutory/.test(t),
+    secure: /security (is )?(a |the )?(top|critical|key|main)|secure (by design|deployment)|devsecops|security (testing )?(in|throughout) (the )?pipeline/.test(t),
+  };
+}
+
+/**
+ * Project conditions the user states outright ("requirements won't change", "new technology"...) are the
+ * strongest evidence about the SDLC, so they override both the model's rating and the keyword signal.
+ */
+export function scenarioCues(scenario: string): Partial<Record<Criterion, number>> {
+  const d = detect(scenario);
+  const out: Partial<Record<Criterion, number>> = {};
+  if (d.stable) Object.assign(out, { requirementStability: 5, changeFrequency: 1 });
+  if (d.volatile || d.feedback) Object.assign(out, { requirementStability: 2, changeFrequency: 5 });
+  if (d.volatile) out.requirementStability = 1;
+  if (d.unknowns) out.requirementStability = Math.min(out.requirementStability ?? 5, 2);
+  if (d.experienced) out.technicalUncertainty = 1;
+  if (d.unproven) out.technicalUncertainty = 5;
+  if (d.risky) out.technicalUncertainty = Math.max(out.technicalUncertainty ?? 0, 4);
+  if (d.continuous) out.changeFrequency = 5;
+  if (d.strictTest) Object.assign(out, { testingFormality: 5, failureConsequence: 5 });
+  if (d.secure) out.securityCriticality = 5;
+  return out;
+}
+
+/** Deterministic decision rules (from the project plan's selection table). A fired rule adds points to a method. */
+export function ruleBoosts(scenario: string) {
+  const d = detect(scenario);
+  const boost: Record<string, number> = {};
+  const fired: string[] = [];
+  const rule = (cond: boolean, method: string, pts: number, text: string) => {
+    if (!cond) return;
+    boost[method] = (boost[method] ?? 0) + pts;
+    fired.push(`${text} -> ${method} (+${pts})`);
+  };
+  rule(d.stable, "Waterfall", 14, "Stable, well-known requirements");
+  rule(d.strictTest, "V-Model", 14, "Strict verification and validation");
+  rule(d.unproven || d.risky || d.unknowns, "Spiral", 14, "High uncertainty or technical risk");
+  rule(d.volatile || d.feedback, "Agile", 14, "Changing requirements or early user feedback");
+  rule(d.continuous || d.secure, "DevSecOps", 14, "Continuous secure delivery");
+  rule((d.volatile || d.feedback) && d.regulated, "Hybrid (V-Model gates + Agile iterations)", 14, "High regulation with evolving requirements");
+  return { boost, fired };
 }
 
 const fill = (t: string, p: RequirementsProfile) => {
@@ -242,10 +314,31 @@ export async function runSdlcUncached(profile: RequirementsProfile): Promise<Sdl
   const summary = summarise(profile);
   // Model judgement (may be unusable from a tiny model -> neutral 3s) ...
   const { ratings } = await askJson(financeSdlcAgent, ratingsPrompt(summary, CRITERIA), Ratings).catch(() => Ratings.parse({ ratings: {} }));
-  // ... blended 50/50 with keyword signals taken from the requirements themselves.
+  // ... compared with keyword signals taken from the requirements, and with conditions the user stated outright.
   const kw = keywordScores(profile);
-  const scores = Object.fromEntries(CRITERIA.map((c) => [c, Math.round((ratings[c].score + kw[c]) / 2)])) as Record<Criterion, number>;
-  const ranking = rankMethods(scores);
+  const cues = scenarioCues(profile.scenario);
+  const freq = new Map<number, number>();
+  CRITERIA.forEach((c) => freq.set(ratings[c].score, (freq.get(ratings[c].score) ?? 0) + 1));
+  const uniform = Math.max(...freq.values()) >= 7; // near-identical ratings carry no information
+  const scores = {} as Record<Criterion, number>;
+  const notes = {} as Record<Criterion, string>;
+  for (const c of CRITERIA) {
+    const cue = cues[c];
+    if (cue !== undefined) {
+      scores[c] = cue;
+      notes[c] = "stated in the scenario";
+    } else if (uniform) {
+      scores[c] = kw[c];
+      notes[c] = `keyword signal ${kw[c]} (model ratings were uniform, so ignored)`;
+    } else {
+      scores[c] = Math.round((ratings[c].score + kw[c]) / 2);
+      notes[c] = `model ${ratings[c].score}, keyword signal ${kw[c]}`;
+    }
+  }
+  const { boost, fired } = ruleBoosts(profile.scenario);
+  const ranking = rankMethods(scores)
+    .map((r) => ({ method: r.method, score: Math.min(100, r.score + (boost[r.method] ?? 0)) }))
+    .sort((x, y) => y.score - x.score);
   const recommended = ranking[0].method;
   const ideal = SDLC_PROFILES[recommended];
 
@@ -256,7 +349,7 @@ export async function runSdlcUncached(profile: RequirementsProfile): Promise<Sdl
   const val = all.filter((r) => r.status === "NEEDS-VALIDATION");
 
   const plan = {
-    rationale: `${recommended} ranks first because the project scores high on ${fitting.map((c) => `${c} (${scores[c]}/5)`).join(", ")}, which this method is designed to handle.`,
+    rationale: `${fired.length ? 'Decision rules fired: ' + fired.join('; ') + '. ' : ''}${recommended} ranks first because the project scores high on ${fitting.map((c) => `${c} (${scores[c]}/5)`).join(", ")}, which this method is designed to handle.`,
     phases: PHASE_TEMPLATES[recommended].map((ph) => ({ ...ph, activities: ph.activities.map((a) => fill(a, profile)) })),
     humanApprovalPoints: [
       `Requirements baseline (${all.map((r) => r.id).join(", ") || "none"})`,
@@ -269,8 +362,9 @@ export async function runSdlcUncached(profile: RequirementsProfile): Promise<Sdl
   };
 
   return {
-    ratings: Object.fromEntries(CRITERIA.map((c) => [c, { score: scores[c], rationale: `model ${ratings[c].score}, keyword signal ${kw[c]}` }])),
+    ratings: Object.fromEntries(CRITERIA.map((c) => [c, { score: scores[c], rationale: notes[c] }])),
     ranking,
+    rules: fired,
     recommended,
     plan,
     disclaimer:
@@ -311,7 +405,7 @@ ${p.risks.map((r) => `- ${r.risk} -> ${r.mitigation}`).join("\n")}
 ${p.openQuestions.map((q) => `- ${q}`).join("\n")}
 
 ## SDLC recommendation: ${s.recommended}
-${s.ranking.map((r) => `- ${r.method}: ${r.score}/100`).join("\n")}
+${s.rules.length ? 'Decision rules fired:\n' + s.rules.map((r) => '- ' + r).join('\n') + '\n\n' : ''}${s.ranking.map((r) => `- ${r.method}: ${r.score}/100`).join("\n")}
 
 ### Ratings
 ${Object.entries(s.ratings).map(([k, v]) => `- ${k}: ${v.score}/5${v.rationale ? ` - ${v.rationale}` : ""}`).join("\n")}
