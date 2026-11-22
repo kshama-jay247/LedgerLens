@@ -1,6 +1,6 @@
 # LedgerLens: Software Architecture Intelligence for Finance
 
-A local-first, multi-agent assistant for **financial-sector software requirements and SDLC recommendation**, modelled on the SAI education project. It runs entirely on a local LLM through **Ollama**.
+A local-first, multi-agent assistant for **financial-sector software requirements and SDLC recommendation**. It runs entirely on a local LLM through **Ollama**.
 
 Two agents run in sequence:
 
@@ -21,7 +21,7 @@ The pipeline is exposed as the Mastra workflow `finance-requirements-then-sdlc` 
 Prerequisites: Node.js >= 22.13 and [Ollama](https://ollama.com).
 
 ```bash
-git clone <your-repo-url> && cd ledgerlens
+git clone https://github.com/kshama-jay247/LedgerLens.git && cd ledgerlens
 npm install
 cp .env.example .env
 
@@ -34,7 +34,7 @@ npm run dev                             # Mastra Studio: run finance-requirement
 npm run check                           # type-check
 ```
 
-Slow? See [docs/OLLAMA_PERFORMANCE.md](docs/OLLAMA_PERFORMANCE.md).
+If slow, see [docs/OLLAMA_PERFORMANCE.md](docs/OLLAMA_PERFORMANCE.md).
 
 ## Fast mode (live demos / CPU-only laptops)
 
@@ -77,7 +77,3 @@ src/mastra/
 - Outputs from small local models need human review. This is decision support, not compliance or legal advice.
 - The corpus reports documented public practices only; it does not claim undocumented practices don't exist.
 - Never treat a `NEEDS-VALIDATION` item as a confirmed obligation.
-
-## License
-
-MIT
